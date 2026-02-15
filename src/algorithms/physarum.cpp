@@ -235,6 +235,31 @@ void PhysarumSim::dispatchReset(WGPUCommandEncoder encoder) {
     m_outputTextures.current = 0;
     m_frameCounter = 0;
 
+    // Recreate agent buffer if size changed
+    uint64_t requiredSize = (uint64_t)m_agentCount * 16;
+    uint64_t currentSize = m_agentBuffer ? wgpuBufferGetSize(m_agentBuffer) : 0;
+
+    if (currentSize != requiredSize) {
+        if (m_agentBuffer) { wgpuBufferDestroy(m_agentBuffer); wgpuBufferRelease(m_agentBuffer); }
+        if (m_group1) wgpuBindGroupRelease(m_group1);
+
+        WGPUBufferDescriptor desc = {};
+        desc.size = requiredSize;
+        desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
+        desc.label = "physarum_agents";
+        m_agentBuffer = wgpuDeviceCreateBuffer(m_device, &desc);
+
+        WGPUBindGroupEntry entry = {};
+        entry.binding = 0;
+        entry.buffer = m_agentBuffer;
+        entry.size = requiredSize;
+        WGPUBindGroupDescriptor bgDesc = {};
+        bgDesc.layout = m_group1Layout;
+        bgDesc.entryCount = 1;
+        bgDesc.entries = &entry;
+        m_group1 = wgpuDeviceCreateBindGroup(m_device, &bgDesc);
+    }
+
     clearTextures();
     uploadParams();
 
@@ -382,30 +407,33 @@ void PhysarumSim::onGui() {
             if (ac > 4000000) ac = 4000000;
             if ((uint32_t)ac != m_agentCount) {
                 m_agentCount = (uint32_t)ac;
-                // Recreate agent buffer
-                if (m_agentBuffer) wgpuBufferDestroy(m_agentBuffer);
-                if (m_agentBuffer) wgpuBufferRelease(m_agentBuffer);
-                if (m_group1) wgpuBindGroupRelease(m_group1);
-
-                WGPUBufferDescriptor desc = {};
-                desc.size = (uint64_t)m_agentCount * 16;
-                desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-                desc.label = "physarum_agents";
-                m_agentBuffer = wgpuDeviceCreateBuffer(m_device, &desc);
-
-                WGPUBindGroupEntry entry = {};
-                entry.binding = 0;
-                entry.buffer = m_agentBuffer;
-                entry.size = (uint64_t)m_agentCount * 16;
-                WGPUBindGroupDescriptor bgDesc = {};
-                bgDesc.layout = m_group1Layout;
-                bgDesc.entryCount = 1;
-                bgDesc.entries = &entry;
-                m_group1 = wgpuDeviceCreateBindGroup(m_device, &bgDesc);
-
                 m_needsReset = true;
             }
         }
+    }
+
+    if (ImGui::Button("Load Preset")) {
+        m_linkTypes = false;
+        // Type 0
+        m_senseAngle[0] = 22.500f; m_senseDistance[0] = 9.000f;
+        m_turnAngle[0] = 66.886f; m_moveSpeed[0] = 0.409f;
+        m_deposit[0] = 0.008f; m_eat[0] = 0.050f;
+        m_diffuseRate[0] = 0.984f; m_hue[0] = 0.154f; m_saturation[0] = 0.500f;
+        // Type 1
+        m_senseAngle[1] = 22.500f; m_senseDistance[1] = 91.532f;
+        m_turnAngle[1] = 105.723f; m_moveSpeed[1] = 3.883f;
+        m_deposit[1] = 0.010f; m_eat[1] = 0.115f;
+        m_diffuseRate[1] = 0.990f; m_hue[1] = 0.269f; m_saturation[1] = 0.000f;
+        // Type 2
+        m_senseAngle[2] = 113.557f; m_senseDistance[2] = 85.372f;
+        m_turnAngle[2] = 66.886f; m_moveSpeed[2] = 0.409f;
+        m_deposit[2] = 0.364f; m_eat[2] = 0.500f;
+        m_diffuseRate[2] = 0.993f; m_hue[2] = 0.846f; m_saturation[2] = 0.500f;
+        // Type 3
+        m_senseAngle[3] = 22.500f; m_senseDistance[3] = 9.000f;
+        m_turnAngle[3] = 66.886f; m_moveSpeed[3] = 1.447f;
+        m_deposit[3] = 0.034f; m_eat[3] = 0.142f;
+        m_diffuseRate[3] = 0.908f; m_hue[3] = 0.611f; m_saturation[3] = 0.340f;
     }
 
     ImGui::Checkbox("Link All Types", &m_linkTypes);
