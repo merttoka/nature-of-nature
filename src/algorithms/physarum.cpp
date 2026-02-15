@@ -1,8 +1,10 @@
 #include "physarum.h"
+#include "../preset.h"
 #include <imgui.h>
 #include <cmath>
 #include <cstring>
 #include <cstdio>
+#include <random>
 
 static constexpr float DEG2RAD = 3.14159265359f / 180.0f;
 
@@ -402,9 +404,9 @@ void PhysarumSim::onGui() {
 
     {
         int ac = (int)m_agentCount;
-        if (ImGui::InputInt("Agents (reset)", &ac, 1000, 10000)) {
+        if (ImGui::InputInt("Agents (reset)", &ac, 1000, 1000000)) {
             if (ac < 1024) ac = 1024;
-            if (ac > 4000000) ac = 4000000;
+            if (ac > 5000000) ac = 5000000;
             if ((uint32_t)ac != m_agentCount) {
                 m_agentCount = (uint32_t)ac;
                 m_needsReset = true;
@@ -412,28 +414,67 @@ void PhysarumSim::onGui() {
         }
     }
 
-    if (ImGui::Button("Load Preset")) {
+    if (ImGui::Button("Randomize")) {
+        static std::mt19937 rng(std::random_device{}());
+        auto rf = [&](float lo, float hi) {
+            return std::uniform_real_distribution<float>(lo, hi)(rng);
+        };
         m_linkTypes = false;
-        // Type 0
-        m_senseAngle[0] = 22.500f; m_senseDistance[0] = 9.000f;
-        m_turnAngle[0] = 66.886f; m_moveSpeed[0] = 0.409f;
-        m_deposit[0] = 0.008f; m_eat[0] = 0.050f;
-        m_diffuseRate[0] = 0.984f; m_hue[0] = 0.154f; m_saturation[0] = 0.500f;
-        // Type 1
-        m_senseAngle[1] = 22.500f; m_senseDistance[1] = 91.532f;
-        m_turnAngle[1] = 105.723f; m_moveSpeed[1] = 3.883f;
-        m_deposit[1] = 0.010f; m_eat[1] = 0.115f;
-        m_diffuseRate[1] = 0.990f; m_hue[1] = 0.269f; m_saturation[1] = 0.000f;
-        // Type 2
-        m_senseAngle[2] = 113.557f; m_senseDistance[2] = 85.372f;
-        m_turnAngle[2] = 66.886f; m_moveSpeed[2] = 0.409f;
-        m_deposit[2] = 0.364f; m_eat[2] = 0.500f;
-        m_diffuseRate[2] = 0.993f; m_hue[2] = 0.846f; m_saturation[2] = 0.500f;
-        // Type 3
-        m_senseAngle[3] = 22.500f; m_senseDistance[3] = 9.000f;
-        m_turnAngle[3] = 66.886f; m_moveSpeed[3] = 1.447f;
-        m_deposit[3] = 0.034f; m_eat[3] = 0.142f;
-        m_diffuseRate[3] = 0.908f; m_hue[3] = 0.611f; m_saturation[3] = 0.340f;
+        for (int i = 0; i < 4; i++) {
+            m_senseAngle[i]   = rf(0.1f, 360.0f);
+            m_senseDistance[i] = rf(0.1f, 200.0f);
+            m_turnAngle[i]    = rf(0.1f, 360.0f);
+            m_moveSpeed[i]    = rf(0.01f, 5.0f);
+            m_deposit[i]      = rf(0.001f, 0.5f);
+            m_eat[i]          = rf(0.001f, 0.5f);
+            m_diffuseRate[i]  = rf(0.0f, 1.0f);
+            m_hue[i]          = rf(0.0f, 1.0f);
+            m_saturation[i]   = rf(0.3f, 1.0f);
+        }
+    }
+
+    static char presetName[64] = "default";
+    ImGui::InputText("Preset Name", presetName, sizeof(presetName));
+
+    if (ImGui::Button("Save Preset")) {
+        std::map<std::string, std::vector<float>> data;
+        data["agentCount"] = {(float)m_agentCount};
+        data["linkTypes"] = {m_linkTypes ? 1.0f : 0.0f};
+        data["senseAngle"]   = {m_senseAngle[0], m_senseAngle[1], m_senseAngle[2], m_senseAngle[3]};
+        data["senseDistance"] = {m_senseDistance[0], m_senseDistance[1], m_senseDistance[2], m_senseDistance[3]};
+        data["turnAngle"]    = {m_turnAngle[0], m_turnAngle[1], m_turnAngle[2], m_turnAngle[3]};
+        data["moveSpeed"]    = {m_moveSpeed[0], m_moveSpeed[1], m_moveSpeed[2], m_moveSpeed[3]};
+        data["deposit"]      = {m_deposit[0], m_deposit[1], m_deposit[2], m_deposit[3]};
+        data["eat"]          = {m_eat[0], m_eat[1], m_eat[2], m_eat[3]};
+        data["diffuseRate"]  = {m_diffuseRate[0], m_diffuseRate[1], m_diffuseRate[2], m_diffuseRate[3]};
+        data["hue"]          = {m_hue[0], m_hue[1], m_hue[2], m_hue[3]};
+        data["saturation"]   = {m_saturation[0], m_saturation[1], m_saturation[2], m_saturation[3]};
+        savePreset(std::string("physarum_") + presetName, data);
+    }
+    ImGui::SameLine();
+    if (ImGui::Button("Load Preset")) {
+        auto data = loadPreset(std::string("physarum_") + presetName);
+        if (!data.empty()) {
+            auto load4 = [&](const char* key, float* dst) {
+                auto it = data.find(key);
+                if (it != data.end()) for (size_t i = 0; i < 4 && i < it->second.size(); i++) dst[i] = it->second[i];
+            };
+            if (data.count("agentCount") && !data["agentCount"].empty()) {
+                m_agentCount = (uint32_t)data["agentCount"][0];
+                m_needsReset = true;
+            }
+            if (data.count("linkTypes") && !data["linkTypes"].empty())
+                m_linkTypes = data["linkTypes"][0] > 0.5f;
+            load4("senseAngle", m_senseAngle);
+            load4("senseDistance", m_senseDistance);
+            load4("turnAngle", m_turnAngle);
+            load4("moveSpeed", m_moveSpeed);
+            load4("deposit", m_deposit);
+            load4("eat", m_eat);
+            load4("diffuseRate", m_diffuseRate);
+            load4("hue", m_hue);
+            load4("saturation", m_saturation);
+        }
     }
 
     ImGui::Checkbox("Link All Types", &m_linkTypes);

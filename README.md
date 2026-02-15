@@ -8,9 +8,17 @@ Porting and extending algorithms from [Edge of Chaos](https://github.com/merttok
 
 - **Game of Life** (cellular automata) — ✅ implemented
 - **Physarum** (slime mold transport networks, 4 competitive agent types) — ✅ implemented
-- **Boids** (flocking with cross-simulation food-seeking)
+- **Boids** (flocking with 4 competing types, GPU spatial hashing, trail competition) — ✅ implemented
 - **Termites** (biased random walk, pheromone sensing)
 - **Cyclic Cellular Automata** (N-state threshold systems)
+
+## Features
+
+- Post-processing pipeline (bloom, brightness/contrast, saturation, vignette)
+- Parameter randomization per simulation
+- Preset save/load system (`presets/` directory)
+- Bilinear-filtered rendering (smooth trails)
+- PNG export
 
 ## Stack
 
@@ -35,12 +43,15 @@ src/
   main.cpp              # window, main loop
   gpu_context.h/cpp     # WebGPU device/surface/queue
   compute_pass.h/cpp    # ping-pong textures, compute pipeline helpers
-  render_pass.h/cpp     # fullscreen quad renderer
+  render_pass.h/cpp     # fullscreen quad renderer (bilinear sampling)
+  post_effects.h/cpp    # bloom, brightness, contrast, saturation, vignette
+  preset.h              # save/load preset helpers
   simulation.h          # base simulation interface
   ui.h/cpp              # ImGui setup
   export.h/cpp          # GPU texture readback -> PNG
   algorithms/           # one file pair per algorithm
 shaders/                # WGSL compute + render shaders
+presets/                # saved parameter presets
 ```
 
 ## License
