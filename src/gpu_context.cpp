@@ -14,9 +14,22 @@ bool GpuContext::init(uint32_t w, uint32_t h, const char* title) {
 
     if (!glfwInit()) return false;
     glfwWindowHint(GLFW_CLIENT_API, GLFW_NO_API);
-    glfwWindowHint(GLFW_RESIZABLE, GLFW_FALSE);
+    glfwWindowHint(GLFW_RESIZABLE, GLFW_TRUE);
     window = glfwCreateWindow(width, height, title, nullptr, nullptr);
     if (!window) return false;
+
+    // Set user pointer for callbacks
+    glfwSetWindowUserPointer(window, this);
+
+    // Framebuffer resize callback
+    glfwSetFramebufferSizeCallback(window, [](GLFWwindow* win, int w, int h) {
+        auto* ctx = (GpuContext*)glfwGetWindowUserPointer(win);
+        if (ctx && w > 0 && h > 0) {
+            ctx->width = (uint32_t)w;
+            ctx->height = (uint32_t)h;
+            ctx->configureSurface();
+        }
+    });
 
     // Instance
     WGPUInstanceDescriptor instanceDesc = {};
@@ -90,6 +103,16 @@ void GpuContext::configureSurface() {
     config.height = height;
     config.presentMode = WGPUPresentMode_Fifo;
     wgpuSurfaceConfigure(surface, &config);
+}
+
+void GpuContext::updateSize() {
+    int w, h;
+    glfwGetFramebufferSize(window, &w, &h);
+    if (w > 0 && h > 0) {
+        width = (uint32_t)w;
+        height = (uint32_t)h;
+        configureSurface();
+    }
 }
 
 WGPUTextureView GpuContext::getNextSurfaceTextureView() {

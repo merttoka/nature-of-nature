@@ -3,8 +3,10 @@
 #include "ui.h"
 #include "export.h"
 #include "algorithms/game_of_life.h"
+#include "algorithms/physarum.h"
 #include <imgui.h>
 #include <cstdio>
+#include <memory>
 
 int main() {
     GpuContext gpu;
@@ -13,15 +15,25 @@ int main() {
         return 1;
     }
 
+    // Update to actual framebuffer size (handles Retina displays)
+    gpu.updateSize();
+
     UI ui;
     ui.init(gpu);
 
     RenderPass renderPass;
     renderPass.init(gpu.device, gpu.surfaceFormat);
 
-    // Simulation
-    GameOfLife sim;
-    sim.init(gpu.device, gpu.queue, 512, 512);
+    // Simulations
+    std::unique_ptr<Simulation> sims[] = {
+        std::make_unique<GameOfLife>(),
+        std::make_unique<PhysarumSim>(),
+    };
+    constexpr int simCount = 2;
+    const char* simNames[] = { "Game of Life", "Physarum" };
+    int currentSim = 1; // default to Physarum
+
+    sims[currentSim]->init(gpu.device, gpu.queue, 512, 512);
 
     bool shouldExport = false;
 
@@ -36,10 +48,10 @@ int main() {
         WGPUCommandEncoder encoder = wgpuDeviceCreateCommandEncoder(gpu.device, &encDesc);
 
         // Compute step
-        sim.step(encoder);
+        sims[currentSim]->step(encoder);
 
         // Render sim output to screen
-        WGPUBindGroup quadBG = renderPass.createBindGroup(gpu.device, sim.getOutputView());
+        WGPUBindGroup quadBG = renderPass.createBindGroup(gpu.device, sims[currentSim]->getOutputView());
 
         // Render pass for fullscreen quad + ImGui
         WGPURenderPassColorAttachment colorAtt = {};
@@ -63,9 +75,20 @@ int main() {
         ui.beginFrame();
 
         ImGui::SetNextWindowPos(ImVec2(10, 10), ImGuiCond_FirstUseEver);
-        ImGui::SetNextWindowSize(ImVec2(280, 300), ImGuiCond_FirstUseEver);
+        ImGui::SetNextWindowSize(ImVec2(280, 400), ImGuiCond_FirstUseEver);
         ImGui::Begin("Controls");
-        sim.onGui();
+
+        // Sim switcher
+        int prevSim = currentSim;
+        ImGui::Combo("Simulation", &currentSim, simNames, simCount);
+        if (currentSim != prevSim) {
+            sims[prevSim]->shutdown();
+            sims[currentSim]->init(gpu.device, gpu.queue, 512, 512);
+        }
+
+        ImGui::Separator();
+        sims[currentSim]->onGui();
+
         ImGui::Separator();
         if (ImGui::Button("Export PNG")) shouldExport = true;
         ImGui::End();
@@ -90,12 +113,12 @@ int main() {
         // Export after frame
         if (shouldExport) {
             shouldExport = false;
-            exportTextureToPNG(gpu.device, gpu.queue, sim.getOutputTexture(),
-                               sim.params.width, sim.params.height, "export.png");
+            exportTextureToPNG(gpu.device, gpu.queue, sims[currentSim]->getOutputTexture(),
+                               sims[currentSim]->params.width, sims[currentSim]->params.height, "export.png");
         }
     }
 
-    sim.shutdown();
+    sims[currentSim]->shutdown();
     renderPass.shutdown();
     ui.shutdown();
     gpu.shutdown();

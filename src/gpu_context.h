@@ -15,6 +15,7 @@ struct GpuContext {
 
     bool init(uint32_t w, uint32_t h, const char* title);
     void configureSurface();
+    void updateSize();
     WGPUTextureView getNextSurfaceTextureView();
     void present();
     void shutdown();
