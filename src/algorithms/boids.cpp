@@ -256,6 +256,15 @@ void BoidsSim::uploadParams() {
         gp.saturations[i]         = m_saturation[i];
     }
 
+    float totalWeight = m_typeWeight[0] + m_typeWeight[1] + m_typeWeight[2] + m_typeWeight[3];
+    if (totalWeight < 0.001f) totalWeight = 1.0f;
+    float cumul = 0.0f;
+    for (int i = 0; i < 4; i++) {
+        cumul += m_typeWeight[i] / totalWeight;
+        gp.typeRatios[i] = cumul;
+    }
+    gp.typeRatios[3] = 1.0f;
+
     wgpuQueueWriteBuffer(m_queue, m_uniformBuffer, 0, &gp, sizeof(gp));
 }
 
@@ -557,27 +566,38 @@ void BoidsSim::onGui() {
         }
     }
 
-    if (ImGui::Button("Randomize")) {
+    {
         static std::mt19937 rng(std::random_device{}());
         auto rf = [&](float lo, float hi) {
             return std::uniform_real_distribution<float>(lo, hi)(rng);
         };
-        m_linkTypes = false;
-        for (int i = 0; i < 4; i++) {
-            m_maxSpeed[i]          = rf(0.1f, 10.0f);
-            m_maxForce[i]          = rf(0.01f, 1.0f);
-            m_typeSeparateRange[i] = rf(1.0f, 2000.0f);
-            m_globalSeparateRange[i]= rf(1.0f, 2000.0f);
-            m_alignRange[i]        = rf(1.0f, 5000.0f);
-            m_attractRange[i]      = rf(1.0f, 10000.0f);
-            m_foodSensorDist[i]    = rf(1.0f, 100.0f);
-            m_sensorAngle[i]       = rf(0.01f, 3.14f);
-            m_foodStrength[i]      = rf(0.0f, 5.0f);
-            m_deposit[i]           = rf(0.001f, 0.5f);
-            m_eat[i]               = rf(0.001f, 0.5f);
-            m_diffuseRate[i]       = rf(0.0f, 1.0f);
-            m_hue[i]               = rf(0.0f, 1.0f);
-            m_saturation[i]        = rf(0.3f, 1.0f);
+        if (ImGui::Button("Rnd Movement")) {
+            for (int i = 0; i < 4; i++) {
+                m_maxSpeed[i]          = rf(0.1f, 10.0f);
+                m_maxForce[i]          = rf(0.01f, 1.0f);
+                m_typeSeparateRange[i] = rf(1.0f, 2000.0f);
+                m_globalSeparateRange[i]= rf(1.0f, 2000.0f);
+                m_alignRange[i]        = rf(1.0f, 5000.0f);
+                m_attractRange[i]      = rf(1.0f, 10000.0f);
+                m_foodSensorDist[i]    = rf(1.0f, 100.0f);
+                m_sensorAngle[i]       = rf(0.01f, 3.14f);
+                m_foodStrength[i]      = rf(0.0f, 5.0f);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Rnd Deposition")) {
+            for (int i = 0; i < 4; i++) {
+                m_deposit[i]     = rf(0.001f, 0.5f);
+                m_eat[i]         = rf(0.001f, 0.5f);
+                m_diffuseRate[i] = rf(0.0f, 1.0f);
+            }
+        }
+        ImGui::SameLine();
+        if (ImGui::Button("Rnd Colors")) {
+            for (int i = 0; i < 4; i++) {
+                m_hue[i]        = rf(0.0f, 1.0f);
+                m_saturation[i] = rf(0.3f, 1.0f);
+            }
         }
     }
 
@@ -603,6 +623,7 @@ void BoidsSim::onGui() {
         data["diffuseRate"]       = {m_diffuseRate[0], m_diffuseRate[1], m_diffuseRate[2], m_diffuseRate[3]};
         data["hue"]               = {m_hue[0], m_hue[1], m_hue[2], m_hue[3]};
         data["saturation"]        = {m_saturation[0], m_saturation[1], m_saturation[2], m_saturation[3]};
+        data["typeWeight"]        = {m_typeWeight[0], m_typeWeight[1], m_typeWeight[2], m_typeWeight[3]};
         savePreset(std::string("boids_") + presetName, data);
     }
     ImGui::SameLine();
@@ -637,10 +658,25 @@ void BoidsSim::onGui() {
             load4("diffuseRate", m_diffuseRate);
             load4("hue", m_hue);
             load4("saturation", m_saturation);
+            load4("typeWeight", m_typeWeight);
         }
     }
 
     ImGui::Checkbox("Link All Types", &m_linkTypes);
+
+    if (ImGui::TreeNode("Type Distribution")) {
+        ImGui::SliderFloat("Type 0 %", &m_typeWeight[0], 0.0f, 100.0f);
+        ImGui::SliderFloat("Type 1 %", &m_typeWeight[1], 0.0f, 100.0f);
+        ImGui::SliderFloat("Type 2 %", &m_typeWeight[2], 0.0f, 100.0f);
+        ImGui::SliderFloat("Type 3 %", &m_typeWeight[3], 0.0f, 100.0f);
+        float total = m_typeWeight[0] + m_typeWeight[1] + m_typeWeight[2] + m_typeWeight[3];
+        if (total > 0.0f) {
+            ImGui::Text("Actual: %.0f%% / %.0f%% / %.0f%% / %.0f%%",
+                m_typeWeight[0]/total*100, m_typeWeight[1]/total*100,
+                m_typeWeight[2]/total*100, m_typeWeight[3]/total*100);
+        }
+        ImGui::TreePop();
+    }
 
     if (m_linkTypes) {
         bool changed = false;
@@ -656,8 +692,6 @@ void BoidsSim::onGui() {
         changed |= ImGui::SliderFloat("Deposit", &m_deposit[0], 0.001f, 0.5f);
         changed |= ImGui::SliderFloat("Eat", &m_eat[0], 0.001f, 0.5f);
         changed |= ImGui::SliderFloat("Diffuse Rate", &m_diffuseRate[0], 0.0f, 1.0f);
-        changed |= ImGui::SliderFloat("Hue", &m_hue[0], 0.0f, 1.0f);
-        changed |= ImGui::SliderFloat("Saturation", &m_saturation[0], 0.0f, 1.0f);
         if (changed) {
             for (int i = 1; i < 4; i++) {
                 m_maxSpeed[i]          = m_maxSpeed[0];
@@ -672,8 +706,6 @@ void BoidsSim::onGui() {
                 m_deposit[i]           = m_deposit[0];
                 m_eat[i]               = m_eat[0];
                 m_diffuseRate[i]       = m_diffuseRate[0];
-                m_hue[i]               = m_hue[0];
-                m_saturation[i]        = m_saturation[0];
             }
         }
     } else {
@@ -694,12 +726,24 @@ void BoidsSim::onGui() {
                 ImGui::SliderFloat("Deposit", &m_deposit[t], 0.001f, 0.5f);
                 ImGui::SliderFloat("Eat", &m_eat[t], 0.001f, 0.5f);
                 ImGui::SliderFloat("Diffuse Rate", &m_diffuseRate[t], 0.0f, 1.0f);
-                ImGui::SliderFloat("Hue", &m_hue[t], 0.0f, 1.0f);
-                ImGui::SliderFloat("Saturation", &m_saturation[t], 0.0f, 1.0f);
                 ImGui::PopID();
                 ImGui::TreePop();
             }
         }
+    }
+
+    // Colors always per-type
+    if (ImGui::TreeNode("Colors")) {
+        for (int t = 0; t < 4; t++) {
+            ImGui::PushID(100 + t);
+            char label[32];
+            snprintf(label, sizeof(label), "Hue %d", t);
+            ImGui::SliderFloat(label, &m_hue[t], 0.0f, 1.0f);
+            snprintf(label, sizeof(label), "Sat %d", t);
+            ImGui::SliderFloat(label, &m_saturation[t], 0.0f, 1.0f);
+            ImGui::PopID();
+        }
+        ImGui::TreePop();
     }
 }
 

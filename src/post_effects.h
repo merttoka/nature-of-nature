@@ -9,6 +9,7 @@ public:
     void resize(uint32_t w, uint32_t h);
     void apply(WGPUCommandEncoder encoder, WGPUTextureView simOutput);
     WGPUTextureView getOutputView() const;
+    WGPUTexture getOutputTexture() const { return m_outputTex; }
     void onGui();
     void shutdown();
 

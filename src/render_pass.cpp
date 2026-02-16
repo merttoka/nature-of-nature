@@ -3,8 +3,8 @@
 #include <cstdio>
 
 void RenderPass::init(WGPUDevice device, WGPUTextureFormat surfaceFormat) {
-    // Bind group layout: sampler + texture
-    WGPUBindGroupLayoutEntry entries[2] = {};
+    // Bind group layout: sampler + texture + uniform
+    WGPUBindGroupLayoutEntry entries[3] = {};
     entries[0].binding = 0;
     entries[0].visibility = WGPUShaderStage_Fragment;
     entries[0].sampler.type = WGPUSamplerBindingType_Filtering;
@@ -14,21 +14,40 @@ void RenderPass::init(WGPUDevice device, WGPUTextureFormat surfaceFormat) {
     entries[1].texture.sampleType = WGPUTextureSampleType_Float;
     entries[1].texture.viewDimension = WGPUTextureViewDimension_2D;
 
+    entries[2].binding = 2;
+    entries[2].visibility = WGPUShaderStage_Fragment;
+    entries[2].buffer.type = WGPUBufferBindingType_Uniform;
+    entries[2].buffer.minBindingSize = 16;
+
     WGPUBindGroupLayoutDescriptor bglDesc = {};
-    bglDesc.entryCount = 2;
+    bglDesc.entryCount = 3;
     bglDesc.entries = entries;
     bindGroupLayout = wgpuDeviceCreateBindGroupLayout(device, &bglDesc);
 
-    // Sampler
+    // Sampler — nearest neighbor for crisp pixels when zoomed
     WGPUSamplerDescriptor samplerDesc = {};
-    samplerDesc.magFilter = WGPUFilterMode_Linear;
-    samplerDesc.minFilter = WGPUFilterMode_Linear;
+    samplerDesc.magFilter = WGPUFilterMode_Nearest;
+    samplerDesc.minFilter = WGPUFilterMode_Nearest;
     samplerDesc.addressModeU = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeV = WGPUAddressMode_ClampToEdge;
     samplerDesc.addressModeW = WGPUAddressMode_ClampToEdge;
     samplerDesc.mipmapFilter = WGPUMipmapFilterMode_Nearest;
     samplerDesc.maxAnisotropy = 1;
     sampler = wgpuDeviceCreateSampler(device, &samplerDesc);
+
+    // Uniform buffer for transform (vec4f: xy=offset, z=zoom, w=unused)
+    {
+        WGPUBufferDescriptor desc = {};
+        desc.size = 16;
+        desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
+        desc.label = "render_transform";
+        uniformBuffer = wgpuDeviceCreateBuffer(device, &desc);
+
+        // Default: no offset, zoom=1
+        float data[4] = { 0.0f, 0.0f, 1.0f, 0.0f };
+        WGPUQueue queue = wgpuDeviceGetQueue(device);
+        wgpuQueueWriteBuffer(queue, uniformBuffer, 0, data, 16);
+    }
 
     // Shader
     std::string code = loadShaderFile("shaders/fullscreen_quad.wgsl");
@@ -73,17 +92,25 @@ void RenderPass::init(WGPUDevice device, WGPUTextureFormat surfaceFormat) {
 }
 
 WGPUBindGroup RenderPass::createBindGroup(WGPUDevice device, WGPUTextureView textureView) {
-    WGPUBindGroupEntry entries[2] = {};
+    WGPUBindGroupEntry entries[3] = {};
     entries[0].binding = 0;
     entries[0].sampler = sampler;
     entries[1].binding = 1;
     entries[1].textureView = textureView;
+    entries[2].binding = 2;
+    entries[2].buffer = uniformBuffer;
+    entries[2].size = 16;
 
     WGPUBindGroupDescriptor desc = {};
     desc.layout = bindGroupLayout;
-    desc.entryCount = 2;
+    desc.entryCount = 3;
     desc.entries = entries;
     return wgpuDeviceCreateBindGroup(device, &desc);
+}
+
+void RenderPass::setTransform(WGPUQueue queue, float offsetX, float offsetY, float zoom, float aspectRatio) {
+    float data[4] = { offsetX, offsetY, zoom, aspectRatio };
+    wgpuQueueWriteBuffer(queue, uniformBuffer, 0, data, 16);
 }
 
 void RenderPass::draw(WGPUCommandEncoder encoder, WGPUTextureView targetView,
@@ -107,6 +134,7 @@ void RenderPass::draw(WGPUCommandEncoder encoder, WGPUTextureView targetView,
 }
 
 void RenderPass::shutdown() {
+    if (uniformBuffer) { wgpuBufferDestroy(uniformBuffer); wgpuBufferRelease(uniformBuffer); }
     if (sampler) wgpuSamplerRelease(sampler);
     if (bindGroupLayout) wgpuBindGroupLayoutRelease(bindGroupLayout);
     if (pipeline) wgpuRenderPipelineRelease(pipeline);

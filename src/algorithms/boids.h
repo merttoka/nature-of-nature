@@ -83,6 +83,7 @@ private:
     float m_diffuseRate[4]        = {0.95f, 0.95f, 0.95f, 0.95f};
     float m_hue[4]                = {0.0f, 0.25f, 0.5f, 0.75f};
     float m_saturation[4]         = {0.7f, 0.7f, 0.7f, 0.7f};
+    float m_typeWeight[4]         = {25.0f, 25.0f, 25.0f, 25.0f};
 
     // GPU uniform struct (must match shader)
     struct GpuParams {
@@ -102,6 +103,7 @@ private:
         float diffuseRates[4];
         float hues[4];
         float saturations[4];
+        float typeRatios[4];
     };
-    static_assert(sizeof(GpuParams) == 256, "GpuParams must be 256 bytes");
+    static_assert(sizeof(GpuParams) == 272, "GpuParams must be 272 bytes");
 };

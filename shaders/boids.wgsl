@@ -29,6 +29,7 @@ struct Params {
     diffuseRates: vec4f,
     hues: vec4f,
     saturations: vec4f,
+    typeRatios: vec4f,         // cumulative thresholds for type distribution
 };
 
 // Group 0: textures + uniforms
@@ -142,11 +143,12 @@ fn reset_agents(@builtin(global_invocation_id) gid: vec3u) {
     let r2 = random2(vec2f(f32(gid.x), f32(gid.x)) * 0.001 + sin(t));
     let vel = normalize(2.0 * (r2 - 0.5)) * 0.5;
 
-    // Type by quarter
+    // Type by cumulative ratio thresholds
+    let frac = f32(gid.x) / f32(count);
     var typeId = 3u;
-    if (gid.x < count / 4u) { typeId = 0u; }
-    else if (gid.x < count / 2u) { typeId = 1u; }
-    else if (gid.x < count * 3u / 4u) { typeId = 2u; }
+    if (frac < params.typeRatios.x) { typeId = 0u; }
+    else if (frac < params.typeRatios.y) { typeId = 1u; }
+    else if (frac < params.typeRatios.z) { typeId = 2u; }
 
     agents[gid.x] = BoidAgent(pos, vel, vec2f(0.0), typeId, 0u, 0.0, 0.0, 0.0, 0.0);
 }

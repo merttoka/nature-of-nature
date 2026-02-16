@@ -1,4 +1,4 @@
-# nature-of-nature
+# Nature of Nature
 
 Cross-platform symbolic generative art toolbox. Nature-inspired simple systems producing complex emergent forms.
 
@@ -9,16 +9,17 @@ Porting and extending algorithms from [Edge of Chaos](https://github.com/merttok
 - **Game of Life** (cellular automata) — ✅ implemented
 - **Physarum** (slime mold transport networks, 4 competitive agent types) — ✅ implemented
 - **Boids** (flocking with 4 competing types, GPU spatial hashing, trail competition) — ✅ implemented
-- **Termites** (biased random walk, pheromone sensing)
+- **Termites** (biased random walk, probabilistic pheromone deposition, 4 competitive types) — ✅ implemented
 - **Cyclic Cellular Automata** (N-state threshold systems)
 
 ## Features
 
 - Post-processing pipeline (bloom, brightness/contrast, saturation, vignette)
-- Parameter randomization per simulation
+- Zoom/pan viewport (scroll wheel, click-drag, WASD/ZX keys, nearest-neighbor sampling)
+- Granular parameter randomization (Movement / Deposition / Colors buttons)
+- Color controls always per-type, independent of Link All Types
 - Preset save/load system (`presets/` directory)
-- Bilinear-filtered rendering (smooth trails)
-- PNG export
+- PNG export to `exports/` with metadata filenames (`SimName_WxH_timestamp.png`), includes post-effects
 
 ## Stack
 
@@ -43,7 +44,7 @@ src/
   main.cpp              # window, main loop
   gpu_context.h/cpp     # WebGPU device/surface/queue
   compute_pass.h/cpp    # ping-pong textures, compute pipeline helpers
-  render_pass.h/cpp     # fullscreen quad renderer (bilinear sampling)
+  render_pass.h/cpp     # fullscreen quad renderer (nearest-neighbor, zoom/pan)
   post_effects.h/cpp    # bloom, brightness, contrast, saturation, vignette
   preset.h              # save/load preset helpers
   simulation.h          # base simulation interface

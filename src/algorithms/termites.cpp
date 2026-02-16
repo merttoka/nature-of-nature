@@ -1,4 +1,4 @@
-#include "physarum.h"
+#include "termites.h"
 #include "../preset.h"
 #include <imgui.h>
 #include <cmath>
@@ -8,13 +8,14 @@
 
 static constexpr float DEG2RAD = 3.14159265359f / 180.0f;
 
-void PhysarumSim::init(WGPUDevice device, WGPUQueue queue, uint32_t w, uint32_t h) {
+void TermitesSim::init(WGPUDevice device, WGPUQueue queue, uint32_t w, uint32_t h) {
     m_device = device;
     m_queue = queue;
     params.width = w;
     params.height = h;
 
     m_trailTextures.init(device, w, h, WGPUTextureFormat_RGBA16Float);
+    m_moundTextures.init(device, w, h, WGPUTextureFormat_RGBA16Float);
     m_outputTextures.init(device, w, h, WGPUTextureFormat_RGBA8Unorm);
 
     createBuffers();
@@ -22,28 +23,25 @@ void PhysarumSim::init(WGPUDevice device, WGPUQueue queue, uint32_t w, uint32_t 
     m_needsReset = true;
 }
 
-void PhysarumSim::createBuffers() {
-    // Agent buffer: 16 bytes per agent (vec2f position + vec2f direction)
+void TermitesSim::createBuffers() {
     {
         WGPUBufferDescriptor desc = {};
         desc.size = (uint64_t)m_agentCount * 16;
         desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        desc.label = "physarum_agents";
+        desc.label = "termites_agents";
         m_agentBuffer = wgpuDeviceCreateBuffer(m_device, &desc);
     }
-    // Uniform buffer: 160 bytes
     {
         WGPUBufferDescriptor desc = {};
         desc.size = sizeof(GpuParams);
         desc.usage = WGPUBufferUsage_Uniform | WGPUBufferUsage_CopyDst;
-        desc.label = "physarum_params";
+        desc.label = "termites_params";
         m_uniformBuffer = wgpuDeviceCreateBuffer(m_device, &desc);
     }
 }
 
-void PhysarumSim::createPipelines() {
-    // Load shader
-    std::string code = loadShaderFile("shaders/physarum.wgsl");
+void TermitesSim::createPipelines() {
+    std::string code = loadShaderFile("shaders/termites.wgsl");
     if (code.empty()) return;
 
     WGPUShaderModuleWGSLDescriptor wgslDesc = {};
@@ -53,9 +51,9 @@ void PhysarumSim::createPipelines() {
     smDesc.nextInChain = &wgslDesc.chain;
     m_shaderModule = wgpuDeviceCreateShaderModule(m_device, &smDesc);
 
-    // Group 0 layout: uniform, trailRead, trailWrite, outRead, outWrite
+    // Group 0: uniform, trailR/W, moundR/W, outR/W (7 bindings)
     {
-        WGPUBindGroupLayoutEntry entries[5] = {};
+        WGPUBindGroupLayoutEntry entries[7] = {};
 
         // b0: uniform
         entries[0].binding = 0;
@@ -63,7 +61,7 @@ void PhysarumSim::createPipelines() {
         entries[0].buffer.type = WGPUBufferBindingType_Uniform;
         entries[0].buffer.minBindingSize = sizeof(GpuParams);
 
-        // b1: trailRead (texture_2d<f32>)
+        // b1: trailRead (texture_2d)
         entries[1].binding = 1;
         entries[1].visibility = WGPUShaderStage_Compute;
         entries[1].texture.sampleType = WGPUTextureSampleType_Float;
@@ -76,32 +74,45 @@ void PhysarumSim::createPipelines() {
         entries[2].storageTexture.format = WGPUTextureFormat_RGBA16Float;
         entries[2].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
 
-        // b3: outRead (texture_2d<f32>)
+        // b3: moundRead (texture_2d)
         entries[3].binding = 3;
         entries[3].visibility = WGPUShaderStage_Compute;
         entries[3].texture.sampleType = WGPUTextureSampleType_Float;
         entries[3].texture.viewDimension = WGPUTextureViewDimension_2D;
 
-        // b4: outWrite (storage rgba8unorm)
+        // b4: moundWrite (storage rgba16float)
         entries[4].binding = 4;
         entries[4].visibility = WGPUShaderStage_Compute;
         entries[4].storageTexture.access = WGPUStorageTextureAccess_WriteOnly;
-        entries[4].storageTexture.format = WGPUTextureFormat_RGBA8Unorm;
+        entries[4].storageTexture.format = WGPUTextureFormat_RGBA16Float;
         entries[4].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
 
+        // b5: outRead (texture_2d)
+        entries[5].binding = 5;
+        entries[5].visibility = WGPUShaderStage_Compute;
+        entries[5].texture.sampleType = WGPUTextureSampleType_Float;
+        entries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
+
+        // b6: outWrite (storage rgba8unorm)
+        entries[6].binding = 6;
+        entries[6].visibility = WGPUShaderStage_Compute;
+        entries[6].storageTexture.access = WGPUStorageTextureAccess_WriteOnly;
+        entries[6].storageTexture.format = WGPUTextureFormat_RGBA8Unorm;
+        entries[6].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
+
         WGPUBindGroupLayoutDescriptor desc = {};
-        desc.entryCount = 5;
+        desc.entryCount = 7;
         desc.entries = entries;
         m_group0Layout = wgpuDeviceCreateBindGroupLayout(m_device, &desc);
     }
 
-    // Group 1 layout: agents storage buffer
+    // Group 1: agents storage buffer
     {
         WGPUBindGroupLayoutEntry entry = {};
         entry.binding = 0;
         entry.visibility = WGPUShaderStage_Compute;
         entry.buffer.type = WGPUBufferBindingType_Storage;
-        entry.buffer.minBindingSize = 16; // at least 1 agent
+        entry.buffer.minBindingSize = 16;
 
         WGPUBindGroupLayoutDescriptor desc = {};
         desc.entryCount = 1;
@@ -109,7 +120,6 @@ void PhysarumSim::createPipelines() {
         m_group1Layout = wgpuDeviceCreateBindGroupLayout(m_device, &desc);
     }
 
-    // Pipeline layout with 2 bind groups
     {
         WGPUBindGroupLayout layouts[2] = { m_group0Layout, m_group1Layout };
         WGPUPipelineLayoutDescriptor desc = {};
@@ -118,7 +128,6 @@ void PhysarumSim::createPipelines() {
         m_pipelineLayout = wgpuDeviceCreatePipelineLayout(m_device, &desc);
     }
 
-    // Create all 6 pipelines sharing shader module and layout
     auto makePipeline = [&](const char* entry) -> WGPUComputePipeline {
         WGPUComputePipelineDescriptor desc = {};
         desc.layout = m_pipelineLayout;
@@ -130,11 +139,10 @@ void PhysarumSim::createPipelines() {
     m_resetTexturePipeline  = makePipeline("reset_texture");
     m_resetAgentsPipeline   = makePipeline("reset_agents");
     m_moveAgentsPipeline    = makePipeline("move_agents");
+    m_decayTexturePipeline  = makePipeline("decay_texture");
     m_writeTrailsPipeline   = makePipeline("write_trails");
-    m_diffuseTexturePipeline = makePipeline("diffuse_texture");
     m_renderPipeline        = makePipeline("render");
 
-    // Group 1 bind group (agents buffer — doesn't change unless agent count changes)
     {
         WGPUBindGroupEntry entry = {};
         entry.binding = 0;
@@ -149,8 +157,8 @@ void PhysarumSim::createPipelines() {
     }
 }
 
-WGPUBindGroup PhysarumSim::buildGroup0() {
-    WGPUBindGroupEntry entries[5] = {};
+WGPUBindGroup TermitesSim::buildGroup0() {
+    WGPUBindGroupEntry entries[7] = {};
 
     entries[0].binding = 0;
     entries[0].buffer = m_uniformBuffer;
@@ -163,19 +171,25 @@ WGPUBindGroup PhysarumSim::buildGroup0() {
     entries[2].textureView = m_trailTextures.writeView();
 
     entries[3].binding = 3;
-    entries[3].textureView = m_outputTextures.readView();
+    entries[3].textureView = m_moundTextures.readView();
 
     entries[4].binding = 4;
-    entries[4].textureView = m_outputTextures.writeView();
+    entries[4].textureView = m_moundTextures.writeView();
+
+    entries[5].binding = 5;
+    entries[5].textureView = m_outputTextures.readView();
+
+    entries[6].binding = 6;
+    entries[6].textureView = m_outputTextures.writeView();
 
     WGPUBindGroupDescriptor desc = {};
     desc.layout = m_group0Layout;
-    desc.entryCount = 5;
+    desc.entryCount = 7;
     desc.entries = entries;
     return wgpuDeviceCreateBindGroup(m_device, &desc);
 }
 
-void PhysarumSim::uploadParams() {
+void TermitesSim::uploadParams() {
     GpuParams gp = {};
     gp.rezX = params.width;
     gp.rezY = params.height;
@@ -188,13 +202,12 @@ void PhysarumSim::uploadParams() {
         gp.turnAngles[i]     = m_turnAngle[i] * DEG2RAD;
         gp.moveSpeeds[i]     = m_moveSpeed[i];
         gp.depositAmounts[i] = m_deposit[i];
-        gp.eatAmounts[i]     = m_eat[i];
-        gp.diffuseRates[i]   = m_diffuseRate[i];
+        gp.depositRates[i]   = m_depositRate[i];
+        gp.decayRates[i]     = m_decayRate[i];
         gp.hues[i]           = m_hue[i];
         gp.saturations[i]    = m_saturation[i];
     }
 
-    // Compute cumulative type ratios from weights
     float totalWeight = m_typeWeight[0] + m_typeWeight[1] + m_typeWeight[2] + m_typeWeight[3];
     if (totalWeight < 0.001f) totalWeight = 1.0f;
     float cumul = 0.0f;
@@ -202,16 +215,15 @@ void PhysarumSim::uploadParams() {
         cumul += m_typeWeight[i] / totalWeight;
         gp.typeRatios[i] = cumul;
     }
-    gp.typeRatios[3] = 1.0f; // ensure no rounding gaps
+    gp.typeRatios[3] = 1.0f;
 
     wgpuQueueWriteBuffer(m_queue, m_uniformBuffer, 0, &gp, sizeof(gp));
 }
 
-void PhysarumSim::clearTextures() {
-    // Zero-fill all 4 textures via CPU upload
+void TermitesSim::clearTextures() {
     uint32_t w = params.width, h = params.height;
 
-    // Trail textures: rgba16float = 8 bytes per pixel
+    // Trail + mound textures: rgba16float = 8 bytes per pixel
     {
         std::vector<uint8_t> zeros(w * h * 8, 0);
         WGPUImageCopyTexture dst = {};
@@ -223,6 +235,11 @@ void PhysarumSim::clearTextures() {
         dst.texture = m_trailTextures.texA;
         wgpuQueueWriteTexture(m_queue, &dst, zeros.data(), zeros.size(), &layout, &size);
         dst.texture = m_trailTextures.texB;
+        wgpuQueueWriteTexture(m_queue, &dst, zeros.data(), zeros.size(), &layout, &size);
+
+        dst.texture = m_moundTextures.texA;
+        wgpuQueueWriteTexture(m_queue, &dst, zeros.data(), zeros.size(), &layout, &size);
+        dst.texture = m_moundTextures.texB;
         wgpuQueueWriteTexture(m_queue, &dst, zeros.data(), zeros.size(), &layout, &size);
     }
 
@@ -242,12 +259,12 @@ void PhysarumSim::clearTextures() {
     }
 }
 
-void PhysarumSim::dispatchReset(WGPUCommandEncoder encoder) {
+void TermitesSim::dispatchReset(WGPUCommandEncoder encoder) {
     m_trailTextures.current = 0;
+    m_moundTextures.current = 0;
     m_outputTextures.current = 0;
     m_frameCounter = 0;
 
-    // Recreate agent buffer if size changed
     uint64_t requiredSize = (uint64_t)m_agentCount * 16;
     uint64_t currentSize = m_agentBuffer ? wgpuBufferGetSize(m_agentBuffer) : 0;
 
@@ -258,7 +275,7 @@ void PhysarumSim::dispatchReset(WGPUCommandEncoder encoder) {
         WGPUBufferDescriptor desc = {};
         desc.size = requiredSize;
         desc.usage = WGPUBufferUsage_Storage | WGPUBufferUsage_CopyDst;
-        desc.label = "physarum_agents";
+        desc.label = "termites_agents";
         m_agentBuffer = wgpuDeviceCreateBuffer(m_device, &desc);
 
         WGPUBindGroupEntry entry = {};
@@ -277,7 +294,6 @@ void PhysarumSim::dispatchReset(WGPUCommandEncoder encoder) {
 
     WGPUBindGroup bg0 = buildGroup0();
 
-    // Reset agents kernel
     WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
     wgpuComputePassEncoderSetPipeline(pass, m_resetAgentsPipeline);
     wgpuComputePassEncoderSetBindGroup(pass, 0, bg0, 0, nullptr);
@@ -289,7 +305,7 @@ void PhysarumSim::dispatchReset(WGPUCommandEncoder encoder) {
     wgpuBindGroupRelease(bg0);
 }
 
-void PhysarumSim::step(WGPUCommandEncoder encoder) {
+void TermitesSim::step(WGPUCommandEncoder encoder) {
     if (m_needsReset) {
         m_needsReset = false;
         dispatchReset(encoder);
@@ -307,10 +323,8 @@ void PhysarumSim::step(WGPUCommandEncoder encoder) {
         m_frameCounter++;
         uploadParams();
 
-        // 1. Build group 0 for current ping-pong state
+        // 1. MoveAgents — reads trailRead for sensing
         WGPUBindGroup bg0 = buildGroup0();
-
-        // 2. MoveAgents — reads trailRead, updates agents
         {
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
             wgpuComputePassEncoderSetPipeline(pass, m_moveAgentsPipeline);
@@ -321,10 +335,10 @@ void PhysarumSim::step(WGPUCommandEncoder encoder) {
             wgpuComputePassEncoderRelease(pass);
         }
 
-        // 3. DiffuseTexture — trailRead -> trailWrite (blur)
+        // 2. DecayTexture — trail decays, mound identity-copied
         {
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
-            wgpuComputePassEncoderSetPipeline(pass, m_diffuseTexturePipeline);
+            wgpuComputePassEncoderSetPipeline(pass, m_decayTexturePipeline);
             wgpuComputePassEncoderSetBindGroup(pass, 0, bg0, 0, nullptr);
             wgpuComputePassEncoderSetBindGroup(pass, 1, m_group1, 0, nullptr);
             wgpuComputePassEncoderDispatchWorkgroups(pass, wgTex, hgTex, 1);
@@ -332,20 +346,23 @@ void PhysarumSim::step(WGPUCommandEncoder encoder) {
             wgpuComputePassEncoderRelease(pass);
         }
 
-        // 4. Copy trailWrite -> trailRead so WriteTrails can read diffused data
+        // 3. Copy trailWrite -> trailRead, moundWrite -> moundRead
         {
-            WGPUImageCopyTexture src = {};
-            src.texture = m_trailTextures.current == 0 ? m_trailTextures.texB : m_trailTextures.texA;
-            WGPUImageCopyTexture dst = {};
-            dst.texture = m_trailTextures.current == 0 ? m_trailTextures.texA : m_trailTextures.texB;
+            WGPUImageCopyTexture src = {}, dst = {};
             WGPUExtent3D size = { params.width, params.height, 1 };
+
+            src.texture = m_trailTextures.current == 0 ? m_trailTextures.texB : m_trailTextures.texA;
+            dst.texture = m_trailTextures.current == 0 ? m_trailTextures.texA : m_trailTextures.texB;
+            wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &size);
+
+            src.texture = m_moundTextures.current == 0 ? m_moundTextures.texB : m_moundTextures.texA;
+            dst.texture = m_moundTextures.current == 0 ? m_moundTextures.texA : m_moundTextures.texB;
             wgpuCommandEncoderCopyTextureToTexture(encoder, &src, &dst, &size);
         }
 
         wgpuBindGroupRelease(bg0);
 
-        // 5. WriteTrails — reads trailRead (now has diffused data), writes trailWrite
-        // Need new bind group since we just copied (trailRead has diffused data, trailWrite same)
+        // 4. WriteTrails — pheromone deposit (always) + mound deposit (probabilistic)
         bg0 = buildGroup0();
         {
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
@@ -357,12 +374,13 @@ void PhysarumSim::step(WGPUCommandEncoder encoder) {
             wgpuComputePassEncoderRelease(pass);
         }
 
-        // 6. Swap trail ping-pong
+        // 5. Swap trail + mound ping-pong
         m_trailTextures.swap();
+        m_moundTextures.swap();
 
         wgpuBindGroupRelease(bg0);
 
-        // 7. Render — reads trailRead + outRead, writes outWrite
+        // 6. Render — composite trail + mound -> outWrite
         bg0 = buildGroup0();
         {
             WGPUComputePassEncoder pass = wgpuCommandEncoderBeginComputePass(encoder, nullptr);
@@ -374,27 +392,27 @@ void PhysarumSim::step(WGPUCommandEncoder encoder) {
             wgpuComputePassEncoderRelease(pass);
         }
 
-        // 8. Swap output ping-pong
+        // 7. Swap output ping-pong
         m_outputTextures.swap();
 
         wgpuBindGroupRelease(bg0);
     }
 }
 
-void PhysarumSim::reset() {
+void TermitesSim::reset() {
     m_needsReset = true;
 }
 
-WGPUTextureView PhysarumSim::getOutputView() {
+WGPUTextureView TermitesSim::getOutputView() {
     return m_outputTextures.readView();
 }
 
-WGPUTexture PhysarumSim::getOutputTexture() {
+WGPUTexture TermitesSim::getOutputTexture() {
     return m_outputTextures.current == 0 ? m_outputTextures.texA : m_outputTextures.texB;
 }
 
-void PhysarumSim::onGui() {
-    ImGui::Text("Physarum");
+void TermitesSim::onGui() {
+    ImGui::Text("Termites");
     ImGui::Separator();
 
     if (ImGui::Button(params.paused ? "Play" : "Pause")) {
@@ -415,7 +433,7 @@ void PhysarumSim::onGui() {
     {
         int ac = (int)m_agentCount;
         if (ImGui::InputInt("Agents (reset)", &ac, 1000, 1000000)) {
-            if (ac < 1024) ac = 1024;
+            if (ac < 128) ac = 128;
             if (ac > 5000000) ac = 5000000;
             if ((uint32_t)ac != m_agentCount) {
                 m_agentCount = (uint32_t)ac;
@@ -440,9 +458,9 @@ void PhysarumSim::onGui() {
         ImGui::SameLine();
         if (ImGui::Button("Rnd Deposition")) {
             for (int i = 0; i < 4; i++) {
-                m_deposit[i]     = rf(0.001f, 0.5f);
-                m_eat[i]         = rf(0.001f, 0.5f);
-                m_diffuseRate[i] = rf(0.0f, 1.0f);
+                m_deposit[i]     = rf(0.001f, 1.0f);
+                m_depositRate[i] = rf(0.001f, 1.0f);
+                m_decayRate[i]   = rf(0.0f, 1.0f);
             }
         }
         ImGui::SameLine();
@@ -466,16 +484,16 @@ void PhysarumSim::onGui() {
         data["turnAngle"]    = {m_turnAngle[0], m_turnAngle[1], m_turnAngle[2], m_turnAngle[3]};
         data["moveSpeed"]    = {m_moveSpeed[0], m_moveSpeed[1], m_moveSpeed[2], m_moveSpeed[3]};
         data["deposit"]      = {m_deposit[0], m_deposit[1], m_deposit[2], m_deposit[3]};
-        data["eat"]          = {m_eat[0], m_eat[1], m_eat[2], m_eat[3]};
-        data["diffuseRate"]  = {m_diffuseRate[0], m_diffuseRate[1], m_diffuseRate[2], m_diffuseRate[3]};
+        data["depositRate"]  = {m_depositRate[0], m_depositRate[1], m_depositRate[2], m_depositRate[3]};
+        data["decayRate"]    = {m_decayRate[0], m_decayRate[1], m_decayRate[2], m_decayRate[3]};
         data["hue"]          = {m_hue[0], m_hue[1], m_hue[2], m_hue[3]};
         data["saturation"]   = {m_saturation[0], m_saturation[1], m_saturation[2], m_saturation[3]};
         data["typeWeight"]   = {m_typeWeight[0], m_typeWeight[1], m_typeWeight[2], m_typeWeight[3]};
-        savePreset(std::string("physarum_") + presetName, data);
+        savePreset(std::string("termites_") + presetName, data);
     }
     ImGui::SameLine();
     if (ImGui::Button("Load Preset")) {
-        auto data = loadPreset(std::string("physarum_") + presetName);
+        auto data = loadPreset(std::string("termites_") + presetName);
         if (!data.empty()) {
             auto load4 = [&](const char* key, float* dst) {
                 auto it = data.find(key);
@@ -492,8 +510,8 @@ void PhysarumSim::onGui() {
             load4("turnAngle", m_turnAngle);
             load4("moveSpeed", m_moveSpeed);
             load4("deposit", m_deposit);
-            load4("eat", m_eat);
-            load4("diffuseRate", m_diffuseRate);
+            load4("depositRate", m_depositRate);
+            load4("decayRate", m_decayRate);
             load4("hue", m_hue);
             load4("saturation", m_saturation);
             load4("typeWeight", m_typeWeight);
@@ -522,9 +540,9 @@ void PhysarumSim::onGui() {
         changed |= ImGui::SliderFloat("Sense Distance", &m_senseDistance[0], 0.1f, 200.0f);
         changed |= ImGui::SliderFloat("Turn Angle", &m_turnAngle[0], 0.1f, 360.0f);
         changed |= ImGui::SliderFloat("Move Speed", &m_moveSpeed[0], 0.01f, 5.0f);
-        changed |= ImGui::SliderFloat("Deposit", &m_deposit[0], 0.001f, 0.5f);
-        changed |= ImGui::SliderFloat("Eat", &m_eat[0], 0.001f, 0.5f);
-        changed |= ImGui::SliderFloat("Diffuse Rate", &m_diffuseRate[0], 0.0f, 1.0f);
+        changed |= ImGui::SliderFloat("Deposit", &m_deposit[0], 0.001f, 1.0f);
+        changed |= ImGui::SliderFloat("Deposit Rate", &m_depositRate[0], 0.001f, 1.0f);
+        changed |= ImGui::SliderFloat("Decay Rate", &m_decayRate[0], 0.0f, 1.0f);
         if (changed) {
             for (int i = 1; i < 4; i++) {
                 m_senseAngle[i]   = m_senseAngle[0];
@@ -532,8 +550,8 @@ void PhysarumSim::onGui() {
                 m_turnAngle[i]    = m_turnAngle[0];
                 m_moveSpeed[i]    = m_moveSpeed[0];
                 m_deposit[i]      = m_deposit[0];
-                m_eat[i]          = m_eat[0];
-                m_diffuseRate[i]  = m_diffuseRate[0];
+                m_depositRate[i]  = m_depositRate[0];
+                m_decayRate[i]    = m_decayRate[0];
             }
         }
     } else {
@@ -546,9 +564,9 @@ void PhysarumSim::onGui() {
                 ImGui::SliderFloat("Sense Distance", &m_senseDistance[t], 0.1f, 200.0f);
                 ImGui::SliderFloat("Turn Angle", &m_turnAngle[t], 0.1f, 360.0f);
                 ImGui::SliderFloat("Move Speed", &m_moveSpeed[t], 0.01f, 5.0f);
-                ImGui::SliderFloat("Deposit", &m_deposit[t], 0.001f, 0.5f);
-                ImGui::SliderFloat("Eat", &m_eat[t], 0.001f, 0.5f);
-                ImGui::SliderFloat("Diffuse Rate", &m_diffuseRate[t], 0.0f, 1.0f);
+                ImGui::SliderFloat("Deposit", &m_deposit[t], 0.001f, 1.0f);
+                ImGui::SliderFloat("Deposit Rate", &m_depositRate[t], 0.001f, 1.0f);
+                ImGui::SliderFloat("Decay Rate", &m_decayRate[t], 0.0f, 1.0f);
                 ImGui::PopID();
                 ImGui::TreePop();
             }
@@ -570,23 +588,24 @@ void PhysarumSim::onGui() {
     }
 }
 
-void PhysarumSim::shutdown() {
+void TermitesSim::shutdown() {
     if (m_group1) wgpuBindGroupRelease(m_group1);
     if (m_group0Layout) wgpuBindGroupLayoutRelease(m_group0Layout);
     if (m_group1Layout) wgpuBindGroupLayoutRelease(m_group1Layout);
     if (m_pipelineLayout) wgpuPipelineLayoutRelease(m_pipelineLayout);
 
-    if (m_resetTexturePipeline)   wgpuComputePipelineRelease(m_resetTexturePipeline);
-    if (m_resetAgentsPipeline)    wgpuComputePipelineRelease(m_resetAgentsPipeline);
-    if (m_moveAgentsPipeline)     wgpuComputePipelineRelease(m_moveAgentsPipeline);
-    if (m_writeTrailsPipeline)    wgpuComputePipelineRelease(m_writeTrailsPipeline);
-    if (m_diffuseTexturePipeline) wgpuComputePipelineRelease(m_diffuseTexturePipeline);
-    if (m_renderPipeline)         wgpuComputePipelineRelease(m_renderPipeline);
+    if (m_resetTexturePipeline)  wgpuComputePipelineRelease(m_resetTexturePipeline);
+    if (m_resetAgentsPipeline)   wgpuComputePipelineRelease(m_resetAgentsPipeline);
+    if (m_moveAgentsPipeline)    wgpuComputePipelineRelease(m_moveAgentsPipeline);
+    if (m_decayTexturePipeline)  wgpuComputePipelineRelease(m_decayTexturePipeline);
+    if (m_writeTrailsPipeline)   wgpuComputePipelineRelease(m_writeTrailsPipeline);
+    if (m_renderPipeline)        wgpuComputePipelineRelease(m_renderPipeline);
 
     if (m_shaderModule) wgpuShaderModuleRelease(m_shaderModule);
     if (m_agentBuffer) { wgpuBufferDestroy(m_agentBuffer); wgpuBufferRelease(m_agentBuffer); }
     if (m_uniformBuffer) { wgpuBufferDestroy(m_uniformBuffer); wgpuBufferRelease(m_uniformBuffer); }
 
     m_trailTextures.destroy();
+    m_moundTextures.destroy();
     m_outputTextures.destroy();
 }

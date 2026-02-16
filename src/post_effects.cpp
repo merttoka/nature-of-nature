@@ -26,7 +26,7 @@ void PostEffects::createTextures() {
         WGPUTextureDescriptor desc = {};
         desc.size = { m_width, m_height, 1 };
         desc.format = WGPUTextureFormat_RGBA8Unorm;
-        desc.usage = WGPUTextureUsage_StorageBinding | WGPUTextureUsage_TextureBinding;
+        desc.usage = WGPUTextureUsage_StorageBinding | WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopySrc;
         desc.mipLevelCount = 1;
         desc.sampleCount = 1;
         desc.dimension = WGPUTextureDimension_2D;

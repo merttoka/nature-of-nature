@@ -1,5 +1,6 @@
-// Physarum simulation — 4 competitive agent types, 6 kernels
-// Ported from Unity VISAP
+// Termites simulation — 4 competitive agent types
+// Trail texture = pheromone (decays, used for sensing/navigation)
+// Mound texture = persistent material deposits (no decay, probabilistic)
 
 struct Agent {
     position: vec2f,
@@ -13,8 +14,8 @@ struct Params {
     turnAngles: vec4f,         // per-type (radians)
     moveSpeeds: vec4f,
     depositAmounts: vec4f,
-    eatAmounts: vec4f,
-    diffuseRates: vec4f,
+    depositRates: vec4f,       // probability 0-1 of mound deposit per frame
+    decayRates: vec4f,         // pheromone trail decay (no blur)
     hues: vec4f,
     saturations: vec4f,
     typeRatios: vec4f,         // cumulative thresholds for type distribution
@@ -24,8 +25,10 @@ struct Params {
 @group(0) @binding(0) var<uniform> params: Params;
 @group(0) @binding(1) var trailRead: texture_2d<f32>;
 @group(0) @binding(2) var trailWrite: texture_storage_2d<rgba16float, write>;
-@group(0) @binding(3) var outRead: texture_2d<f32>;
-@group(0) @binding(4) var outWrite: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(3) var moundRead: texture_2d<f32>;
+@group(0) @binding(4) var moundWrite: texture_storage_2d<rgba16float, write>;
+@group(0) @binding(5) var outRead: texture_2d<f32>;
+@group(0) @binding(6) var outWrite: texture_storage_2d<rgba8unorm, write>;
 
 // Group 1: agent buffer
 @group(1) @binding(0) var<storage, read_write> agents: array<Agent>;
@@ -95,6 +98,7 @@ fn reset_texture(@builtin(global_invocation_id) gid: vec3u) {
     let rez = get_rez();
     if (gid.x >= rez.x || gid.y >= rez.y) { return; }
     textureStore(trailWrite, gid.xy, vec4f(0.0));
+    textureStore(moundWrite, gid.xy, vec4f(0.0));
 }
 
 // ---- Kernel 2: Reset Agents ----
@@ -123,7 +127,7 @@ fn reset_agents(@builtin(global_invocation_id) gid: vec3u) {
     agents[gid.x] = Agent(pos, dir);
 }
 
-// ---- Kernel 3: Move Agents ----
+// ---- Kernel 3: Move Agents (biased random walk, senses trails) ----
 @compute @workgroup_size(256)
 fn move_agents(@builtin(global_invocation_id) gid: vec3u) {
     let count = get_agents_count();
@@ -137,13 +141,12 @@ fn move_agents(@builtin(global_invocation_id) gid: vec3u) {
 
     let direction = normalize(a.direction);
 
-    // Select per-type params
     let senseAngle = select_channel(params.senseAngles, agentType);
     let senseDist = select_channel(params.senseDistances, agentType);
     let turnAngle = select_channel(params.turnAngles, agentType);
     let speed = select_channel(params.moveSpeeds, agentType);
 
-    // 3 sensors
+    // 3 sensors — read from trail (pheromone) texture
     let leftSensor = rotate_vec2(direction, -senseAngle) * senseDist;
     let middleSensor = direction * senseDist;
     let rightSensor = rotate_vec2(direction, senseAngle) * senseDist;
@@ -152,7 +155,6 @@ fn move_agents(@builtin(global_invocation_id) gid: vec3u) {
     let middleCoord = a.position + middleSensor;
     let rightCoord = a.position + rightSensor;
 
-    // Sample trail at sensor positions (nearest pixel)
     let leftVal = sample_trail(vec2i(i32(leftCoord.x), i32(leftCoord.y)), rez);
     let middleVal = sample_trail(vec2i(i32(middleCoord.x), i32(middleCoord.y)), rez);
     let rightVal = sample_trail(vec2i(i32(rightCoord.x), i32(rightCoord.y)), rez);
@@ -170,123 +172,122 @@ fn move_agents(@builtin(global_invocation_id) gid: vec3u) {
     let othersR = (rightVal.x + rightVal.y + rightVal.z + rightVal.w) - ownR;
     let rightLevel = ownR - othersR;
 
-    // Turn decision
+    // Turn decision (biased random walk)
     var d = direction;
     if (middleLevel > leftLevel && middleLevel > rightLevel) {
-        d = middleSensor;
-    } else if (middleLevel < leftLevel && middleLevel < rightLevel) {
+        d = direction;
+    } else if (leftLevel > rightLevel) {
+        d = rotate_vec2(d, -turnAngle);
+    } else if (rightLevel > leftLevel) {
+        d = rotate_vec2(d, turnAngle);
+    } else {
         let rnd = random2(vec2f(f32(gid.x), f32(gid.x)) * 0.01 + sin(t) * 0.01);
         var sign = 1.0;
         if (rnd.x > 0.5) { sign = -1.0; }
         d = rotate_vec2(d, sign * turnAngle);
-    } else if (leftLevel < rightLevel) {
-        d = rotate_vec2(d, turnAngle);
-    } else if (leftLevel > rightLevel) {
-        d = rotate_vec2(d, -turnAngle);
-    } else {
-        d = middleSensor;
     }
 
     d = normalize(d);
     a.direction = d * speed;
     a.position = a.position + a.direction;
 
-    // Boundaries: wrap X, flip-wrap Y
-    if (a.position.x < 0.0) { a.position.x = f32(rez.x) - 1.0; }
-    a.position.x = a.position.x % f32(rez.x);
-    if (a.position.y < 0.0 || a.position.y >= f32(rez.y)) {
-        a.position.x = f32(rez.x) - a.position.x;
-    }
-    if (a.position.y < 0.0) { a.position.y = f32(rez.y) - 1.0; }
-    a.position.y = a.position.y % f32(rez.y);
+    // Toroidal wrapping
+    if (a.position.x < 0.0) { a.position.x += rezF.x; }
+    if (a.position.x >= rezF.x) { a.position.x -= rezF.x; }
+    if (a.position.y < 0.0) { a.position.y += rezF.y; }
+    if (a.position.y >= rezF.y) { a.position.y -= rezF.y; }
 
     agents[gid.x] = a;
 }
 
-// ---- Kernel 4: Write Trails ----
+// ---- Kernel 4: Decay + Copy (trail decays, mound persists) ----
+@compute @workgroup_size(8, 8)
+fn decay_texture(@builtin(global_invocation_id) gid: vec3u) {
+    let rez = get_rez();
+    if (gid.x >= rez.x || gid.y >= rez.y) { return; }
+
+    // Trail: exponential decay
+    let val = textureLoad(trailRead, gid.xy, 0);
+    let decayed = vec4f(
+        val.x * params.decayRates.x,
+        val.y * params.decayRates.y,
+        val.z * params.decayRates.z,
+        val.w * params.decayRates.w
+    );
+    textureStore(trailWrite, gid.xy, clamp(decayed, vec4f(0.0), vec4f(1.0)));
+
+    // Mound: identity copy (no decay — persists until reset)
+    let mound = textureLoad(moundRead, gid.xy, 0);
+    textureStore(moundWrite, gid.xy, mound);
+}
+
+// ---- Kernel 5: Write Trails + Mounds ----
 @compute @workgroup_size(256)
 fn write_trails(@builtin(global_invocation_id) gid: vec3u) {
     let count = get_agents_count();
     if (gid.x >= count) { return; }
+    let t = f32(get_time());
 
     let a = agents[gid.x];
     let agentType = get_agent_type(gid.x, count);
     let px = vec2u(u32(round(a.position.x)), u32(round(a.position.y)));
-
-    // Read current trail value from trailRead (diffused data)
-    var env = textureLoad(trailRead, px, 0);
-
     let deposit = select_channel(params.depositAmounts, agentType);
-    let eat = select_channel(params.eatAmounts, agentType);
 
-    // Deposit own channel, eat others
+    // Always deposit pheromone trail (for navigation)
+    var trail = textureLoad(trailRead, px, 0);
     if (agentType == 0) {
-        env.x = clamp(env.x + deposit, 0.0, 1.0);
-        env.y = clamp(env.y - eat, 0.0, 1.0);
-        env.z = clamp(env.z - eat, 0.0, 1.0);
-        env.w = clamp(env.w - eat, 0.0, 1.0);
+        trail.x = clamp(trail.x + deposit, 0.0, 1.0);
     } else if (agentType == 1) {
-        env.x = clamp(env.x - eat, 0.0, 1.0);
-        env.y = clamp(env.y + deposit, 0.0, 1.0);
-        env.z = clamp(env.z - eat, 0.0, 1.0);
-        env.w = clamp(env.w - eat, 0.0, 1.0);
+        trail.y = clamp(trail.y + deposit, 0.0, 1.0);
     } else if (agentType == 2) {
-        env.x = clamp(env.x - eat, 0.0, 1.0);
-        env.y = clamp(env.y - eat, 0.0, 1.0);
-        env.z = clamp(env.z + deposit, 0.0, 1.0);
-        env.w = clamp(env.w - eat, 0.0, 1.0);
+        trail.z = clamp(trail.z + deposit, 0.0, 1.0);
     } else {
-        env.x = clamp(env.x - eat, 0.0, 1.0);
-        env.y = clamp(env.y - eat, 0.0, 1.0);
-        env.z = clamp(env.z - eat, 0.0, 1.0);
-        env.w = clamp(env.w + deposit, 0.0, 1.0);
+        trail.w = clamp(trail.w + deposit, 0.0, 1.0);
     }
+    textureStore(trailWrite, px, trail);
 
-    textureStore(trailWrite, px, env);
-}
-
-// ---- Kernel 5: Diffuse Texture ----
-@compute @workgroup_size(8, 8)
-fn diffuse_texture(@builtin(global_invocation_id) gid: vec3u) {
-    let rez = get_rez();
-    if (gid.x >= rez.x || gid.y >= rez.y) { return; }
-
-    var avg = vec4f(0.0);
-    for (var dx = -1; dx <= 1; dx++) {
-        for (var dy = -1; dy <= 1; dy++) {
-            avg += sample_trail(vec2i(i32(gid.x) + dx, i32(gid.y) + dy), rez);
+    // Probabilistic mound deposit (persistent material)
+    let rnd = random2(vec2f(f32(gid.x) * 0.0137, t * 0.0031));
+    let depositRate = select_channel(params.depositRates, agentType);
+    if (rnd.x < depositRate) {
+        var mound = textureLoad(moundRead, px, 0);
+        if (agentType == 0) {
+            mound.x = clamp(mound.x + deposit, 0.0, 1.0);
+        } else if (agentType == 1) {
+            mound.y = clamp(mound.y + deposit, 0.0, 1.0);
+        } else if (agentType == 2) {
+            mound.z = clamp(mound.z + deposit, 0.0, 1.0);
+        } else {
+            mound.w = clamp(mound.w + deposit, 0.0, 1.0);
         }
+        textureStore(moundWrite, px, mound);
     }
-    avg = avg / 9.0;
-
-    var oc = vec4f(
-        avg.x * params.diffuseRates.x,
-        avg.y * params.diffuseRates.y,
-        avg.z * params.diffuseRates.z,
-        avg.w * params.diffuseRates.w
-    );
-    oc = clamp(oc, vec4f(0.0), vec4f(1.0));
-
-    textureStore(trailWrite, gid.xy, oc);
 }
 
-// ---- Kernel 6: Render ----
+// ---- Kernel 6: Render (composite trail + mound) ----
 @compute @workgroup_size(8, 8)
 fn render(@builtin(global_invocation_id) gid: vec3u) {
     let rez = get_rez();
     if (gid.x >= rez.x || gid.y >= rez.y) { return; }
 
     let trail = textureLoad(trailRead, gid.xy, 0);
+    let mound = textureLoad(moundRead, gid.xy, 0);
 
-    let c1 = hsb2rgb(vec3f(params.hues.x, params.saturations.x, trail.x), 1.0).rgb * trail.x;
-    let c2 = hsb2rgb(vec3f(params.hues.y, params.saturations.y, trail.y), 1.0).rgb * trail.y;
-    let c3 = hsb2rgb(vec3f(params.hues.z, params.saturations.z, trail.z), 1.0).rgb * trail.z;
-    let c4 = hsb2rgb(vec3f(params.hues.w, params.saturations.w, trail.w), 1.0).rgb * trail.w;
+    // Mound color — bright, persistent
+    let m1 = hsb2rgb(vec3f(params.hues.x, params.saturations.x, mound.x), 1.0).rgb * mound.x;
+    let m2 = hsb2rgb(vec3f(params.hues.y, params.saturations.y, mound.y), 1.0).rgb * mound.y;
+    let m3 = hsb2rgb(vec3f(params.hues.z, params.saturations.z, mound.z), 1.0).rgb * mound.z;
+    let m4 = hsb2rgb(vec3f(params.hues.w, params.saturations.w, mound.w), 1.0).rgb * mound.w;
+    let moundColor = m1 + m2 + m3 + m4;
 
-    let fresh = c1 + c2 + c3 + c4;
+    // Trail color — faint overlay showing navigation pheromones
+    let t1 = hsb2rgb(vec3f(params.hues.x, params.saturations.x * 0.5, trail.x), 1.0).rgb * trail.x * 0.3;
+    let t2 = hsb2rgb(vec3f(params.hues.y, params.saturations.y * 0.5, trail.y), 1.0).rgb * trail.y * 0.3;
+    let t3 = hsb2rgb(vec3f(params.hues.z, params.saturations.z * 0.5, trail.z), 1.0).rgb * trail.z * 0.3;
+    let t4 = hsb2rgb(vec3f(params.hues.w, params.saturations.w * 0.5, trail.w), 1.0).rgb * trail.w * 0.3;
+    let trailColor = t1 + t2 + t3 + t4;
 
-    var prev = textureLoad(outRead, gid.xy, 0).rgb;
-    prev = prev * 0.65 + fresh * 0.35;
+    let combined = moundColor + trailColor;
 
-    textureStore(outWrite, gid.xy, vec4f(prev, 1.0));
+    textureStore(outWrite, gid.xy, vec4f(combined, 1.0));
 }
