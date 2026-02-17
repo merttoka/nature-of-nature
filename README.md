@@ -14,12 +14,15 @@ Porting and extending algorithms from [Edge of Chaos](https://github.com/merttok
 
 ## Features
 
-- Post-processing pipeline (bloom, brightness/contrast, saturation, vignette)
+- **Compositing layers** — run multiple sims simultaneously, blend with additive/multiply/screen/normal modes + per-layer opacity
+- Post-processing pipeline (bloom, brightness/contrast, saturation, vignette, colormap LUTs)
+- **Colormap system** — built-in scientific colormaps (Viridis, Inferno, Magma, Plasma, Grayscale) applied via luminance remapping
 - Zoom/pan viewport (scroll wheel, click-drag, WASD/ZX keys, nearest-neighbor sampling)
 - Granular parameter randomization (Movement / Deposition / Colors buttons)
 - Color controls always per-type, independent of Link All Types
 - Preset save/load system (`presets/` directory)
-- PNG export to `exports/` with metadata filenames (`SimName_WxH_timestamp.png`), includes post-effects
+- **PNG export** with metadata filenames, post-effects, and **1x–4x hi-res upscale**
+- **PNG sequence recording** with configurable frame interval for video creation
 
 ## Stack
 
@@ -45,6 +48,7 @@ src/
   gpu_context.h/cpp     # WebGPU device/surface/queue
   compute_pass.h/cpp    # ping-pong textures, compute pipeline helpers
   render_pass.h/cpp     # fullscreen quad renderer (nearest-neighbor, zoom/pan)
+  compositor.h/cpp      # N-layer blending (additive, multiply, screen, normal)
   post_effects.h/cpp    # bloom, brightness, contrast, saturation, vignette
   preset.h              # save/load preset helpers
   simulation.h          # base simulation interface

@@ -121,7 +121,7 @@ void GameOfLife::onGui() {
         reset();
     }
 
-    ImGui::SliderInt("Steps/Frame", &m_stepsPerFrame, 1, 20);
+    ImGui::SliderInt("Steps/Frame", &m_stepsPerFrame, 0, 20);
     if (ImGui::SliderFloat("Fill Density", &m_fillDensity, 0.01f, 0.99f)) {
         // Will apply on next reset
     }
@@ -145,4 +145,8 @@ void GameOfLife::shutdown() {
     if (m_bindGroupLayout) wgpuBindGroupLayoutRelease(m_bindGroupLayout);
     if (m_pipeline) wgpuComputePipelineRelease(m_pipeline);
     m_textures.destroy();
+
+    m_bindGroupA = m_bindGroupB = nullptr;
+    m_bindGroupLayout = nullptr;
+    m_pipeline = nullptr;
 }

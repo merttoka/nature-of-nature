@@ -542,7 +542,7 @@ void BoidsSim::onGui() {
         reset();
     }
 
-    ImGui::SliderInt("Steps/Frame", &m_stepsPerFrame, 1, 20);
+    ImGui::SliderInt("Steps/Frame", &m_stepsPerFrame, 0, 20);
 
     {
         int ac = (int)m_agentCount;
@@ -772,4 +772,15 @@ void BoidsSim::shutdown() {
 
     m_trailTextures.destroy();
     m_outputTextures.destroy();
+
+    m_group1 = m_group2 = nullptr;
+    m_group0Layout = m_group1Layout = m_group2Layout = nullptr;
+    m_pipelineLayout = nullptr;
+    m_resetTexturePipeline = m_resetAgentsPipeline = nullptr;
+    m_clearGridPipeline = m_assignCellsPipeline = nullptr;
+    m_moveAgentsPipeline = m_writeTrailsPipeline = nullptr;
+    m_diffuseTexturePipeline = m_renderPipeline = nullptr;
+    m_shaderModule = nullptr;
+    m_agentBuffer = m_uniformBuffer = nullptr;
+    m_cellCountBuffer = m_cellAgentsBuffer = nullptr;
 }

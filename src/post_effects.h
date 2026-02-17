@@ -21,6 +21,8 @@ public:
     float bloomRadius    = 4.0f; // 1 to 20 (sigma)
     float saturationPost = 1.0f; // 0 to 2
     float vignette       = 0.0f; // 0 to 1
+    bool useColormap = false;
+    int colormapIndex = 0;
 
 private:
     void createTextures();
@@ -34,6 +36,12 @@ private:
     // Textures: bloomA (h-blur result), bloomB (v-blur result), output (final)
     WGPUTexture m_bloomATex = nullptr, m_bloomBTex = nullptr, m_outputTex = nullptr;
     WGPUTextureView m_bloomAView = nullptr, m_bloomBView = nullptr, m_outputView = nullptr;
+
+    // LUT
+    WGPUTexture m_lutTex = nullptr;
+    WGPUTextureView m_lutView = nullptr;
+    WGPUSampler m_lutSampler = nullptr;
+    void createLutTexture();
 
     // Pipelines
     WGPUShaderModule m_shaderModule = nullptr;
@@ -51,7 +59,8 @@ private:
         float brightness, contrast;
         float bloomThreshold, bloomIntensity, bloomRadius, saturationPost;
         float vignette;
-        float _pad[3];
+        uint32_t useLut;
+        float _pad[2];
     };
     static_assert(sizeof(GpuParams) == 48, "PostEffects GpuParams must be 48 bytes");
 };

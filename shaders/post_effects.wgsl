@@ -8,7 +8,7 @@ struct Params {
     bloomRadius: f32,
     saturationPost: f32,
     vignette: f32,
-    _pad0: f32,
+    useLut: u32,
     _pad1: f32,
     _pad2: f32,
 };
@@ -17,6 +17,8 @@ struct Params {
 @group(0) @binding(1) var inputTex: texture_2d<f32>;
 @group(0) @binding(2) var secondaryTex: texture_2d<f32>;
 @group(0) @binding(3) var outputTex: texture_storage_2d<rgba8unorm, write>;
+@group(0) @binding(4) var lutSampler: sampler;
+@group(0) @binding(5) var lutTex: texture_2d<f32>;
 
 fn gaussian(x: f32, sigma: f32) -> f32 {
     return exp(-(x * x) / (2.0 * sigma * sigma));
@@ -100,5 +102,12 @@ fn composite(@builtin(global_invocation_id) gid: vec3u) {
     color = color * vig;
 
     color = clamp(color, vec3f(0.0), vec3f(1.0));
+
+    // Colormap LUT
+    if (params.useLut == 1u) {
+        let luma = dot(color, vec3f(0.2126, 0.7152, 0.0722));
+        color = textureSampleLevel(lutTex, lutSampler, vec2f(luma, 0.5), 0.0).rgb;
+    }
+
     textureStore(outputTex, gid.xy, vec4f(color, 1.0));
 }

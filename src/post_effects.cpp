@@ -1,6 +1,82 @@
 #include "post_effects.h"
 #include <imgui.h>
 #include <cstring>
+#include <cmath>
+
+// Gradient control points: {t, r, g, b}
+struct GradPoint { float t, r, g, b; };
+
+static void lerpGradient(const GradPoint* pts, int n, uint8_t out[256*4]) {
+    for (int i = 0; i < 256; i++) {
+        float t = i / 255.0f;
+        // Find segment
+        int seg = 0;
+        for (int j = 0; j < n - 1; j++) {
+            if (t >= pts[j].t && t <= pts[j+1].t) { seg = j; break; }
+            if (j == n - 2) seg = j;
+        }
+        float frac = (pts[seg+1].t > pts[seg].t)
+            ? (t - pts[seg].t) / (pts[seg+1].t - pts[seg].t) : 0.0f;
+        out[i*4+0] = (uint8_t)((pts[seg].r + (pts[seg+1].r - pts[seg].r) * frac) * 255.0f);
+        out[i*4+1] = (uint8_t)((pts[seg].g + (pts[seg+1].g - pts[seg].g) * frac) * 255.0f);
+        out[i*4+2] = (uint8_t)((pts[seg].b + (pts[seg+1].b - pts[seg].b) * frac) * 255.0f);
+        out[i*4+3] = 255;
+    }
+}
+
+static const char* colormapNames[] = { "Viridis", "Inferno", "Magma", "Plasma", "Grayscale" };
+static const int colormapCount = 5;
+
+static void generateColormap(int index, uint8_t out[256*4]) {
+    switch (index) {
+    case 0: { // Viridis
+        GradPoint pts[] = {
+            {0.0f, 0.267f, 0.004f, 0.329f},
+            {0.25f, 0.282f, 0.140f, 0.458f},
+            {0.5f, 0.127f, 0.566f, 0.551f},
+            {0.75f, 0.544f, 0.774f, 0.247f},
+            {1.0f, 0.993f, 0.906f, 0.144f},
+        };
+        lerpGradient(pts, 5, out);
+    } break;
+    case 1: { // Inferno
+        GradPoint pts[] = {
+            {0.0f, 0.001f, 0.000f, 0.014f},
+            {0.25f, 0.341f, 0.062f, 0.429f},
+            {0.5f, 0.735f, 0.215f, 0.330f},
+            {0.75f, 0.978f, 0.557f, 0.035f},
+            {1.0f, 0.988f, 1.000f, 0.644f},
+        };
+        lerpGradient(pts, 5, out);
+    } break;
+    case 2: { // Magma
+        GradPoint pts[] = {
+            {0.0f, 0.001f, 0.000f, 0.014f},
+            {0.25f, 0.316f, 0.072f, 0.485f},
+            {0.5f, 0.717f, 0.215f, 0.475f},
+            {0.75f, 0.983f, 0.533f, 0.382f},
+            {1.0f, 0.987f, 0.991f, 0.750f},
+        };
+        lerpGradient(pts, 5, out);
+    } break;
+    case 3: { // Plasma
+        GradPoint pts[] = {
+            {0.0f, 0.050f, 0.030f, 0.528f},
+            {0.25f, 0.494f, 0.012f, 0.658f},
+            {0.5f, 0.798f, 0.280f, 0.470f},
+            {0.75f, 0.973f, 0.585f, 0.253f},
+            {1.0f, 0.940f, 0.975f, 0.131f},
+        };
+        lerpGradient(pts, 5, out);
+    } break;
+    case 4: { // Grayscale
+        for (int i = 0; i < 256; i++) {
+            out[i*4+0] = out[i*4+1] = out[i*4+2] = (uint8_t)i;
+            out[i*4+3] = 255;
+        }
+    } break;
+    }
+}
 
 void PostEffects::init(WGPUDevice device, WGPUQueue queue, uint32_t w, uint32_t h) {
     m_device = device;
@@ -18,6 +94,7 @@ void PostEffects::init(WGPUDevice device, WGPUQueue queue, uint32_t w, uint32_t 
     }
 
     createTextures();
+    createLutTexture();
     createPipelines();
 }
 
@@ -56,6 +133,42 @@ void PostEffects::destroyTextures() {
     m_bloomATex = m_bloomBTex = m_outputTex = nullptr;
 }
 
+void PostEffects::createLutTexture() {
+    // Generate default colormap data
+    uint8_t data[256 * 4];
+    generateColormap(colormapIndex, data);
+
+    WGPUTextureDescriptor desc = {};
+    desc.size = { 256, 1, 1 };
+    desc.format = WGPUTextureFormat_RGBA8Unorm;
+    desc.usage = WGPUTextureUsage_TextureBinding | WGPUTextureUsage_CopyDst;
+    desc.mipLevelCount = 1;
+    desc.sampleCount = 1;
+    desc.dimension = WGPUTextureDimension_2D;
+    desc.label = "lut_texture";
+    m_lutTex = wgpuDeviceCreateTexture(m_device, &desc);
+    m_lutView = wgpuTextureCreateView(m_lutTex, nullptr);
+
+    // Upload data
+    WGPUImageCopyTexture dst = {};
+    dst.texture = m_lutTex;
+    dst.mipLevel = 0;
+    WGPUTextureDataLayout layout = {};
+    layout.bytesPerRow = 256 * 4;
+    layout.rowsPerImage = 1;
+    WGPUExtent3D extent = { 256, 1, 1 };
+    wgpuQueueWriteTexture(m_queue, &dst, data, 256 * 4, &layout, &extent);
+
+    // Sampler
+    WGPUSamplerDescriptor sampDesc = {};
+    sampDesc.magFilter = WGPUFilterMode_Linear;
+    sampDesc.minFilter = WGPUFilterMode_Linear;
+    sampDesc.addressModeU = WGPUAddressMode_ClampToEdge;
+    sampDesc.addressModeV = WGPUAddressMode_ClampToEdge;
+    sampDesc.maxAnisotropy = 1;
+    m_lutSampler = wgpuDeviceCreateSampler(m_device, &sampDesc);
+}
+
 void PostEffects::resize(uint32_t w, uint32_t h) {
     if (w == m_width && h == m_height) return;
     m_width = w;
@@ -75,9 +188,9 @@ void PostEffects::createPipelines() {
     smDesc.nextInChain = &wgslDesc.chain;
     m_shaderModule = wgpuDeviceCreateShaderModule(m_device, &smDesc);
 
-    // Bind group layout: uniform, inputTex, bloomTex (read), outputTex (write)
+    // Bind group layout: uniform, inputTex, bloomTex (read), outputTex (write), lutSampler, lutTex
     {
-        WGPUBindGroupLayoutEntry entries[4] = {};
+        WGPUBindGroupLayoutEntry entries[6] = {};
 
         // b0: uniform
         entries[0].binding = 0;
@@ -104,8 +217,19 @@ void PostEffects::createPipelines() {
         entries[3].storageTexture.format = WGPUTextureFormat_RGBA8Unorm;
         entries[3].storageTexture.viewDimension = WGPUTextureViewDimension_2D;
 
+        // b4: LUT sampler
+        entries[4].binding = 4;
+        entries[4].visibility = WGPUShaderStage_Compute;
+        entries[4].sampler.type = WGPUSamplerBindingType_Filtering;
+
+        // b5: LUT texture (256x1 2D)
+        entries[5].binding = 5;
+        entries[5].visibility = WGPUShaderStage_Compute;
+        entries[5].texture.sampleType = WGPUTextureSampleType_Float;
+        entries[5].texture.viewDimension = WGPUTextureViewDimension_2D;
+
         WGPUBindGroupLayoutDescriptor desc = {};
-        desc.entryCount = 4;
+        desc.entryCount = 6;
         desc.entries = entries;
         m_bindGroupLayout = wgpuDeviceCreateBindGroupLayout(m_device, &desc);
     }
@@ -132,6 +256,24 @@ void PostEffects::createPipelines() {
 }
 
 void PostEffects::apply(WGPUCommandEncoder encoder, WGPUTextureView simOutput) {
+    // Re-upload LUT if colormap changed
+    {
+        static int lastColormapIndex = -1;
+        if (colormapIndex != lastColormapIndex) {
+            lastColormapIndex = colormapIndex;
+            uint8_t data[256 * 4];
+            generateColormap(colormapIndex, data);
+            WGPUImageCopyTexture dst = {};
+            dst.texture = m_lutTex;
+            dst.mipLevel = 0;
+            WGPUTextureDataLayout layout = {};
+            layout.bytesPerRow = 256 * 4;
+            layout.rowsPerImage = 1;
+            WGPUExtent3D extent = { 256, 1, 1 };
+            wgpuQueueWriteTexture(m_queue, &dst, data, 256 * 4, &layout, &extent);
+        }
+    }
+
     // Upload params
     GpuParams gp = {};
     gp.width = m_width;
@@ -143,6 +285,7 @@ void PostEffects::apply(WGPUCommandEncoder encoder, WGPUTextureView simOutput) {
     gp.bloomRadius = bloomRadius;
     gp.saturationPost = saturationPost;
     gp.vignette = vignette;
+    gp.useLut = useColormap ? 1u : 0u;
     wgpuQueueWriteBuffer(m_queue, m_uniformBuffer, 0, &gp, sizeof(gp));
 
     uint32_t wg = (m_width + 7) / 8;
@@ -150,7 +293,7 @@ void PostEffects::apply(WGPUCommandEncoder encoder, WGPUTextureView simOutput) {
 
     // Helper to build bind group
     auto buildBG = [&](WGPUTextureView input, WGPUTextureView secondary, WGPUTextureView output) -> WGPUBindGroup {
-        WGPUBindGroupEntry entries[4] = {};
+        WGPUBindGroupEntry entries[6] = {};
         entries[0].binding = 0;
         entries[0].buffer = m_uniformBuffer;
         entries[0].size = sizeof(GpuParams);
@@ -160,10 +303,14 @@ void PostEffects::apply(WGPUCommandEncoder encoder, WGPUTextureView simOutput) {
         entries[2].textureView = secondary;
         entries[3].binding = 3;
         entries[3].textureView = output;
+        entries[4].binding = 4;
+        entries[4].sampler = m_lutSampler;
+        entries[5].binding = 5;
+        entries[5].textureView = m_lutView;
 
         WGPUBindGroupDescriptor desc = {};
         desc.layout = m_bindGroupLayout;
-        desc.entryCount = 4;
+        desc.entryCount = 6;
         desc.entries = entries;
         return wgpuDeviceCreateBindGroup(m_device, &desc);
     };
@@ -228,10 +375,19 @@ void PostEffects::onGui() {
     ImGui::SliderFloat("Bloom Threshold", &bloomThreshold, 0.1f, 1.0f);
     ImGui::SliderFloat("Bloom Intensity", &bloomIntensity, 0.0f, 0.5f);
     ImGui::SliderFloat("Bloom Radius", &bloomRadius, 1.0f, 12.0f);
+    ImGui::Separator();
+    ImGui::Checkbox("Colormap", &useColormap);
+    if (useColormap) {
+        ImGui::Combo("Preset", &colormapIndex, colormapNames, colormapCount);
+    }
 }
 
 void PostEffects::shutdown() {
     destroyTextures();
+    if (m_lutView) wgpuTextureViewRelease(m_lutView);
+    if (m_lutTex) { wgpuTextureDestroy(m_lutTex); wgpuTextureRelease(m_lutTex); }
+    if (m_lutSampler) wgpuSamplerRelease(m_lutSampler);
+    m_lutView = nullptr; m_lutTex = nullptr; m_lutSampler = nullptr;
     if (m_uniformBuffer) { wgpuBufferDestroy(m_uniformBuffer); wgpuBufferRelease(m_uniformBuffer); }
     if (m_bloomHPipeline) wgpuComputePipelineRelease(m_bloomHPipeline);
     if (m_bloomVPipeline) wgpuComputePipelineRelease(m_bloomVPipeline);
