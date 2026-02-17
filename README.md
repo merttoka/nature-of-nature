@@ -6,11 +6,10 @@ Porting and extending algorithms from [Edge of Chaos](https://github.com/merttok
 
 ## Algorithms
 
-- **Game of Life** (cellular automata) — ✅ implemented
-- **Physarum** (slime mold transport networks, 4 competitive agent types) — ✅ implemented
-- **Boids** (flocking with 4 competing types, GPU spatial hashing, trail competition) — ✅ implemented
-- **Termites** (biased random walk, probabilistic pheromone deposition, 4 competitive types) — ✅ implemented
-- **Cyclic Cellular Automata** (N-state threshold systems)
+- **Game of Life** (cellular automata)
+- **Physarum** (slime mold transport networks, 4 competitive agent types) 
+- **Boids** (flocking with 4 competing types, GPU spatial hashing, trail competition) 
+- **Termites** (biased random walk, probabilistic pheromone deposition, 4 competitive types) 
 
 ## Features
 
